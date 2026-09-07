@@ -568,7 +568,7 @@ fn validate_format_version(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use super::*;
 
@@ -760,6 +760,7 @@ mod tests {
     fn local_path_rejects_non_utf8_unix_paths_with_typed_error() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
 
         let path = PathBuf::from(OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]));
         let error = LocalPath::try_from(path.clone()).expect_err("non-UTF-8 path must fail");

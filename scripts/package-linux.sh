@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Package an existing native release binary; never build or launch it here.
+if [[ $# -gt 3 ]]; then
+  echo "Usage: $0 [BINARY [OUTPUT_DIR [ARCHITECTURE]]]" >&2
+  exit 2
+fi
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+BINARY="${1:-$PROJECT_ROOT/target/release/ghost-chat-cleaner}"
+OUTPUT_DIR="${2:-$PROJECT_ROOT/dist}"
+ARCHITECTURE="${3:-$(uname -m)}"
+
+if [[ ! -f "$BINARY" || ! -x "$BINARY" ]]; then
+  echo "Release binary is missing or not executable: $BINARY. Run cargo build --locked --release first." >&2
+  exit 1
+fi
+case "$ARCHITECTURE" in
+  arm64|aarch64) ARCHITECTURE=aarch64 ;;
+  x86_64) ;;
+  *) echo "Unsupported architecture: $ARCHITECTURE" >&2; exit 2 ;;
+esac
+FONT_NOTICES="$PROJECT_ROOT/assets/fonts/nanumgothic"
+for DOCUMENT in OFL.txt PROVENANCE.md; do
+  [[ -f "$FONT_NOTICES/$DOCUMENT" ]] || { echo "Required font notice missing: $FONT_NOTICES/$DOCUMENT" >&2; exit 1; }
+done
+VERSION="$(awk -F '\"' '/^version = \"/ { print $2; exit }' "$PROJECT_ROOT/Cargo.toml")"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected a numeric release version in Cargo.toml." >&2; exit 1; }
+mkdir -p -- "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd -- "$OUTPUT_DIR" && pwd)"
+PACKAGE="ghost-chat-cleaner-$VERSION-linux-$ARCHITECTURE"
+ARCHIVE="$OUTPUT_DIR/$PACKAGE.tar.gz"
+[[ ! -e "$ARCHIVE" ]] || { echo "Archive already exists: $ARCHIVE" >&2; exit 1; }
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/ghost-chat-cleaner.XXXXXX")"
+trap 'rm -rf -- "$STAGE"' EXIT
+mkdir "$STAGE/$PACKAGE"
+cp -- "$BINARY" "$STAGE/$PACKAGE/ghost-chat-cleaner"
+chmod 755 "$STAGE/$PACKAGE/ghost-chat-cleaner"
+cp -- "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/README.ko.md" "$PROJECT_ROOT/LICENSE" "$STAGE/$PACKAGE/"
+python3 "$PROJECT_ROOT/scripts/generate-notices.py" --target "$ARCHITECTURE-unknown-linux-gnu" --output "$STAGE/$PACKAGE/THIRD_PARTY_NOTICES.txt"
+mkdir -p "$STAGE/$PACKAGE/licenses/nanumgothic"
+cp -- "$FONT_NOTICES/OFL.txt" "$FONT_NOTICES/PROVENANCE.md" "$STAGE/$PACKAGE/licenses/nanumgothic/"
+tar -czf "$STAGE/package.tar.gz" -C "$STAGE" "$PACKAGE"
+mv -- "$STAGE/package.tar.gz" "$ARCHIVE"
+echo "$ARCHIVE"

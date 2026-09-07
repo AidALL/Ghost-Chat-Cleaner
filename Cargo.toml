@@ -2,9 +2,44 @@
 name = "ghost-chat-cleaner"
 version = "0.1.0"
 edition = "2021"
+authors = ["garlicvread <ceo@aidall.tech>"]
+description = "Review and safely remove stale ChatGPT entries from a local catalog"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/AidALL/Ghost-Chat-Cleaner"
 
 [dependencies]
+eframe = { version = "=0.36.1", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+egui_extras = { version = "=0.36.1", default-features = false }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+tempfile = "3.23"
+thiserror = "2.0"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = [
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSRunningApplication", "libc"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSURL"] }
 
 [dev-dependencies]
 serde_json = "1.0"
+tempfile = "3.23"

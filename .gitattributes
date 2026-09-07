@@ -1,0 +1,3 @@
+# Preserve upstream bytes used by provenance and packaging checksum checks.
+licenses/upstream/** -text
+assets/fonts/** -text

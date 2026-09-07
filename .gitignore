@@ -1,3 +1,6 @@
 /target/
 /.tmp/
-/Cargo.lock
+/dist/
+/.autopilot/
+.DS_Store
+__pycache__/

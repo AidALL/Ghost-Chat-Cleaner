@@ -1,1 +1,14 @@
+pub mod app;
+pub mod app_state;
+pub mod browser_profile;
+pub mod browser_transport;
+pub mod catalog;
+mod default_browser;
+pub mod evidence;
+mod file_guard;
 pub mod model;
+pub mod platform;
+pub mod process_guard;
+pub mod repair;
+pub mod web;
+pub mod worker;

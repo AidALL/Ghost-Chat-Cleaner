@@ -1,0 +1,80 @@
+name: Portable builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}-${{ matrix.architecture }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            platform: windows
+            architecture: x86_64
+          - runner: ubuntu-22.04
+            platform: linux
+            architecture: x86_64
+          - runner: macos-14
+            platform: macos
+            architecture: aarch64
+          - runner: macos-15-intel
+            platform: macos
+            architecture: x86_64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check lints
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run synthetic tests
+        run: cargo test --locked --all-targets
+      - name: Run browser collector fixture tests
+        run: node --test tests/web_collector.test.cjs
+      - name: Verify packaged notice metadata
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} -m unittest discover -s tests -p test_generate_notices.py
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/package-macos.sh target/release/ghost-chat-cleaner dist '${{ matrix.architecture }}'
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/package-linux.sh target/release/ghost-chat-cleaner dist '${{ matrix.architecture }}'
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -BinaryPath target/release/ghost-chat-cleaner.exe -OutputDirectory dist -Architecture '${{ matrix.architecture }}'
+      - name: Upload portable archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: ghost-chat-cleaner-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
