@@ -688,20 +688,16 @@ impl GhostChatApp {
             TableBuilder::new(ui)
                 .id_salt("classified-threads")
                 .striped(true)
-                .resizable(true)
-                .min_scrolled_height(120.0)
-                .max_scroll_height(if state.selected().is_empty() {
-                    260.0
-                } else {
-                    120.0
-                })
+                .resizable(false)
+                .min_scrolled_height(0.0)
+                .auto_shrink([false, false])
+                .column(Column::initial(64.0).at_least(60.0).clip(true))
                 .column(Column::initial(42.0).at_least(38.0).clip(true))
                 .column(Column::remainder().at_least(160.0).clip(true))
                 .column(Column::initial(88.0).at_least(76.0).clip(true))
                 .column(Column::initial(90.0).at_least(76.0).clip(true))
-                .column(Column::initial(64.0).at_least(60.0).clip(true))
                 .header(24.0, |mut header| {
-                    for title in ["선택", "제목", "상태", "웹 확인", "검토"] {
+                    for title in ["검토", "선택", "제목", "상태", "웹 확인"] {
                         header.col(|ui| {
                             ui.strong(title);
                         });
@@ -712,6 +708,42 @@ impl GhostChatApp {
                         let thread = rows[row.index()];
                         let identity = thread.identity();
                         let classification = state.effective_classification(identity);
+                        row.col(|ui| match classification {
+                            Classification::ReviewRequired => {
+                                let mut reviewed = state.reviewed().contains(identity);
+                                let label = review_checkbox_label(thread);
+                                let response = ui
+                                    .push_id(
+                                        ("review", &identity.host_id, &identity.thread_id),
+                                        |ui| {
+                                            ui.add_enabled(
+                                                !state.operation().is_foreground(),
+                                                egui::Checkbox::new(&mut reviewed, "확인"),
+                                            )
+                                        },
+                                    )
+                                    .inner;
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::Checkbox,
+                                        !state.operation().is_foreground(),
+                                        reviewed,
+                                        &label,
+                                    )
+                                });
+                                if response
+                                    .on_hover_text(format!(
+                                        "{label}\n내용을 직접 검토했다는 별도 확인"
+                                    ))
+                                    .changed()
+                                {
+                                    review_changes.push((identity.clone(), reviewed));
+                                }
+                            }
+                            Classification::ConfirmedDeleted | Classification::Preserved => {
+                                ui.label("—");
+                            }
+                        });
                         row.col(|ui| {
                             let mut selected = state.selected().contains(identity);
                             let enabled =
@@ -779,42 +811,6 @@ impl GhostChatApp {
                                 }
                             });
                         });
-                        row.col(|ui| match classification {
-                            Classification::ReviewRequired => {
-                                let mut reviewed = state.reviewed().contains(identity);
-                                let label = review_checkbox_label(thread);
-                                let response = ui
-                                    .push_id(
-                                        ("review", &identity.host_id, &identity.thread_id),
-                                        |ui| {
-                                            ui.add_enabled(
-                                                !state.operation().is_foreground(),
-                                                egui::Checkbox::new(&mut reviewed, "확인"),
-                                            )
-                                        },
-                                    )
-                                    .inner;
-                                response.widget_info(|| {
-                                    egui::WidgetInfo::selected(
-                                        egui::WidgetType::Checkbox,
-                                        !state.operation().is_foreground(),
-                                        reviewed,
-                                        &label,
-                                    )
-                                });
-                                if response
-                                    .on_hover_text(format!(
-                                        "{label}\n내용을 직접 검토했다는 별도 확인"
-                                    ))
-                                    .changed()
-                                {
-                                    review_changes.push((identity.clone(), reviewed));
-                                }
-                            }
-                            Classification::ConfirmedDeleted | Classification::Preserved => {
-                                ui.label("—");
-                            }
-                        });
                     });
                 });
 
@@ -830,49 +826,53 @@ impl GhostChatApp {
     fn render_web(&mut self, ui: &mut egui::Ui) {
         let busy = self.state.operation().is_foreground();
         let demo = self.state.run_mode() == RunMode::Demo;
-        section(ui, "ChatGPT 연결", |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        !busy
-                            && !demo
-                            && matches!(
-                                self.state.browser_state(),
-                                BrowserState::Disconnected
-                                    | BrowserState::Expired
-                                    | BrowserState::AwaitingVerification
-                            ),
-                        egui::Button::new("로그인"),
-                    )
-                    .clicked()
-                {
-                    self.request_browser_login();
-                }
-                if ui
-                    .add_enabled(self.can_check_list(), egui::Button::new("목록 확인"))
-                    .clicked()
-                {
-                    self.request_list_check();
-                }
-                if ui
-                    .add_enabled(!busy && !demo, egui::Button::new("연결 해제"))
-                    .on_hover_text("전용 브라우저를 닫고 이 앱에 저장된 로그인 삭제")
-                    .clicked()
-                {
-                    self.request_browser_disconnect();
-                }
-            });
-            if !demo {
-                ui.label(match self.state.browser_state() {
-                    BrowserState::Disconnected => "연결 안 됨",
-                    BrowserState::LoginOpen => "확인 대기",
-                    BrowserState::Connecting => "연결 중",
-                    BrowserState::AwaitingVerification => "연결 확인 필요",
-                    BrowserState::Connected => "연결됨",
-                    BrowserState::Expired => "로그인 필요",
+        egui::Frame::group(ui.style())
+            .inner_margin(10.0)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading("ChatGPT 연결");
+                    if ui
+                        .add_enabled(
+                            !busy
+                                && !demo
+                                && matches!(
+                                    self.state.browser_state(),
+                                    BrowserState::Disconnected
+                                        | BrowserState::Expired
+                                        | BrowserState::AwaitingVerification
+                                ),
+                            egui::Button::new("로그인"),
+                        )
+                        .clicked()
+                    {
+                        self.request_browser_login();
+                    }
+                    if ui
+                        .add_enabled(self.can_check_list(), egui::Button::new("목록 확인"))
+                        .clicked()
+                    {
+                        self.request_list_check();
+                    }
+                    if ui
+                        .add_enabled(!busy && !demo, egui::Button::new("연결 해제"))
+                        .on_hover_text("전용 브라우저를 닫고 이 앱에 저장된 로그인 삭제")
+                        .clicked()
+                    {
+                        self.request_browser_disconnect();
+                    }
+                    if !demo {
+                        ui.label(match self.state.browser_state() {
+                            BrowserState::Disconnected => "연결 안 됨",
+                            BrowserState::LoginOpen => "확인 대기",
+                            BrowserState::Connecting => "연결 중",
+                            BrowserState::AwaitingVerification => "연결 확인 필요",
+                            BrowserState::Connected => "연결됨",
+                            BrowserState::Expired => "로그인 필요",
+                        });
+                    }
                 });
-            }
-        });
+            });
     }
 
     fn render_repair(&mut self, ui: &mut egui::Ui) {
@@ -914,39 +914,42 @@ impl GhostChatApp {
             });
         });
         if selected > 0 {
-            if let Some(instruction) = self.repair_instruction(now) {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(instruction);
-                    if self.state.repair_readiness_at(now).blocker()
-                        == Some(RepairBlocker::WebVerification)
-                        && self.state.browser_ready()
-                        && ui
-                            .add_enabled(self.can_check_list(), egui::Button::new("목록 확인"))
-                            .clicked()
+            ui.horizontal(|ui| {
+                ui.menu_button("백업 위치", |ui| {
+                    ui.set_min_width(360.0);
+                    let mut backup = self.state.backup_directory_input().to_owned();
+                    if ui
+                        .add_enabled(
+                            !busy,
+                            egui::TextEdit::singleline(&mut backup)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("백업을 저장할 폴더 경로"),
+                        )
+                        .changed()
                     {
-                        self.request_list_check();
-                    }
-                    if self.state.process_state_at(now) == ProcessState::Unknown
-                        && ui
-                            .add_enabled(!busy, egui::Button::new("다시 확인"))
-                            .clicked()
-                    {
-                        self.request_process_check();
+                        self.state.set_backup_directory_input(backup);
                     }
                 });
-            }
-            ui.collapsing("백업 위치", |ui| {
-                let mut backup = self.state.backup_directory_input().to_owned();
-                if ui
-                    .add_enabled(
-                        !busy,
-                        egui::TextEdit::singleline(&mut backup)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("백업을 저장할 폴더 경로"),
-                    )
-                    .changed()
-                {
-                    self.state.set_backup_directory_input(backup);
+                if let Some(instruction) = self.repair_instruction(now) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(instruction);
+                        if self.state.repair_readiness_at(now).blocker()
+                            == Some(RepairBlocker::WebVerification)
+                            && self.state.browser_ready()
+                            && ui
+                                .add_enabled(self.can_check_list(), egui::Button::new("목록 확인"))
+                                .clicked()
+                        {
+                            self.request_list_check();
+                        }
+                        if self.state.process_state_at(now) == ProcessState::Unknown
+                            && ui
+                                .add_enabled(!busy, egui::Button::new("다시 확인"))
+                                .clicked()
+                        {
+                            self.request_process_check();
+                        }
+                    });
                 }
             });
         }
@@ -1105,11 +1108,7 @@ impl eframe::App for GhostChatApp {
         if self.state.report().is_some() {
             egui::Panel::bottom("cleanup-actions")
                 .resizable(false)
-                .exact_size(if self.state.selected().is_empty() {
-                    76.0
-                } else {
-                    136.0
-                })
+                .exact_size(96.0)
                 .frame(
                     egui::Frame::new()
                         .fill(ui.visuals().panel_fill)
@@ -1117,8 +1116,11 @@ impl eframe::App for GhostChatApp {
                 )
                 .show(ui, |ui| self.render_repair(ui));
         }
+        let controls_height = (ui.available_height() - 160.0).max(0.0);
         egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
+            .id_salt("setup-controls")
+            .max_height(controls_height)
+            .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.add_space(8.0);
@@ -1131,12 +1133,13 @@ impl eframe::App for GhostChatApp {
                     ui.add_space(8.0);
                     self.render_error(ui);
                 }
-                ui.add_space(8.0);
-                self.render_results(ui);
-                ui.add_space(8.0);
-                self.render_receipt(ui);
-                ui.add_space(12.0);
+                if self.state.receipt().is_some() {
+                    ui.add_space(8.0);
+                    self.render_receipt(ui);
+                }
             });
+        ui.add_space(8.0);
+        self.render_results(ui);
         self.render_repair_confirmation(ui.ctx());
     }
 }

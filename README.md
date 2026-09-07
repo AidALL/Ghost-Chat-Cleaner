@@ -77,7 +77,7 @@ Comparison proof expires after five minutes and is invalidated by rescanning or 
 Cleanup is available on Windows and macOS only, after the catalog and web checks pass.
 
 1. Review each eligible entry, acknowledge any `검토 필요` rows, and select the entries to remove.
-2. Expand `백업 위치` (backup location) to inspect or edit the folder path against the rules below.
+2. Click `백업 위치` (backup location) to inspect or edit the folder path in the popup, following the rules below.
 3. Quit the ChatGPT desktop app and its native helpers yourself; keep the connected browser open. The Chrome extension and Codex CUA runtimes can remain running. While entries are selected, the cleaner quietly checks desktop-app status automatically. A running or unknown status blocks cleanup; use `다시 확인` if the status is unknown, or `목록 확인` if the web comparison needs refreshing.
 4. Press the large `선택 N개 정리` button pinned at the bottom of the window to open the confirmation dialog. It explains the local catalog change and backup. Choose `취소` to keep the selection without cleaning, or `N개 정리` to proceed. Changes to the selection, review, source, backup folder, or web comparison invalidate an open dialog; the app rechecks prerequisites before accepting confirmation.
 5. Keep the app open until the operation ends. Retain the backup path and the displayed receipt details, including the SHA-256 hash and before/after row counts. There is no receipt export or automatic restore command.
