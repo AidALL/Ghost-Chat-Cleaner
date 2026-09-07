@@ -14,19 +14,37 @@ pub enum DefaultBrowserError {
     ResponseLimit,
 }
 
+impl DefaultBrowserError {
+    pub fn message_for(&self, language: crate::i18n::Language) -> &'static str {
+        let (korean, english) = match self {
+            Self::DetectionFailed => (
+                "기본 브라우저를 확인하지 못함",
+                "Could not identify the default browser",
+            ),
+            Self::UnsupportedDefaultBrowser => (
+                "기본 브라우저를 Chrome·Edge·Chromium 중 하나로 설정해야 함",
+                "Set Chrome, Edge, or Chromium as your default browser",
+            ),
+            Self::UnsupportedInstallation => (
+                "Chrome·Edge·Chromium을 설치한 뒤 기본 브라우저로 설정해야 함",
+                "Install Chrome, Edge, or Chromium and set it as your default browser",
+            ),
+            Self::DetectionTimedOut => (
+                "기본 브라우저 확인이 오래 걸림. 다시 시도해야 함",
+                "Default browser detection took too long. Try again",
+            ),
+            Self::ResponseLimit => (
+                "기본 브라우저 정보를 확인하지 못함",
+                "Could not verify the default browser information",
+            ),
+        };
+        language.text(korean, english)
+    }
+}
+
 impl fmt::Display for DefaultBrowserError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::DetectionFailed => "기본 브라우저를 확인하지 못함",
-            Self::UnsupportedDefaultBrowser => {
-                "기본 브라우저를 Chrome·Edge·Chromium 중 하나로 설정해야 함"
-            }
-            Self::UnsupportedInstallation => {
-                "Chrome·Edge·Chromium을 설치한 뒤 기본 브라우저로 설정해야 함"
-            }
-            Self::DetectionTimedOut => "기본 브라우저 확인이 오래 걸림. 다시 시도해야 함",
-            Self::ResponseLimit => "기본 브라우저 정보를 확인하지 못함",
-        })
+        formatter.write_str(self.message_for(crate::i18n::Language::Korean))
     }
 }
 

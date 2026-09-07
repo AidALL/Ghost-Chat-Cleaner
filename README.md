@@ -6,7 +6,7 @@ Ghost Chat Cleaner is a desktop utility for reviewing stale ChatGPT entries in a
 
 Cleanup removes entries only from this device's `local_thread_catalog` table. It does not delete conversations from ChatGPT's servers. A web `404` means unavailable in the checked account and context; it does not prove that a conversation was deleted.
 
-The interface is Korean. The instructions below retain the exact button labels and explain them in English. This is an independent project, not an official OpenAI utility.
+Choose `한국어` or `English` at the top right to change the interface immediately. Live mode remembers the choice for the next launch; demo mode keeps it only for that session. Switching languages preserves the current list, selection, and login state. Conversation titles, file paths, and technical diagnostics remain unchanged. This is an independent project, not an official OpenAI utility.
 
 ## Start from source
 
@@ -18,7 +18,7 @@ cd Ghost-Chat-Cleaner
 cargo run --locked --release -- --demo
 ```
 
-The demo opens the GUI with fixed synthetic conversations and simulated results. It does not open a browser, read real catalog databases or evidence logs, inspect the real process list, or perform real cleanup. The header shows `예시 데이터` (example data).
+The demo opens the GUI with fixed synthetic conversations and simulated results. It does not open a browser, read real catalog databases or evidence logs, inspect the real process list, or perform real cleanup. The header shows `Demo data`.
 
 To inspect your real catalog, close the demo and launch without `--demo`:
 
@@ -45,11 +45,11 @@ Web comparison requires a personal ChatGPT account and a supported native Chrome
 
 ## Inspect your catalog
 
-1. In `대화 목록 파일` (conversation catalog file), enter the path to `codex-dev.db` or press `자동 찾기` (find automatically). If several candidates appear, select the intended file. Press `불러오기` (load) to inspect it read-only.
-2. Optionally expand `추가 설정` (additional settings) and enter deletion-record files or directories, one path per line. Only those explicitly supplied roots are searched. Leave the field empty if you do not have local deletion records.
-3. The app attempts to restore a saved login on startup. If it is not connected, press `로그인` (log in), then sign in to the same personal ChatGPT account as the catalog. Enter passwords and verification codes only on the browser's official sign-in page.
-4. Press `목록 확인` (check list). On macOS, this action requests normal closure of the dedicated login browser and waits up to 30 seconds for successful exit before continuing. On Windows and Linux, close that dedicated browser yourself before continuing. Authentication and comparison reuse the same saved profile.
-5. Review the local titles and results. If no catalog is loaded, `목록 확인` can load the entered path or a sole discovered candidate; multiple candidates require a choice. Successful authentication also compares an existing scan automatically.
+1. In `Conversation list file`, enter the path to `codex-dev.db` or press `Find file`. If several candidates appear, select the intended file. Press `Load` to inspect it read-only.
+2. Optionally expand `Settings` and enter deletion-record files or directories, one path per line. Only those explicitly supplied roots are searched. Leave the field empty if you do not have local deletion records.
+3. The app attempts to restore a saved login on startup. If it is not connected, press `Log in`, then sign in to the same personal ChatGPT account as the catalog. Enter passwords and verification codes only on the browser's official sign-in page.
+4. Press `Check list`. On macOS, this action requests normal closure of the dedicated login browser and waits up to 30 seconds for successful exit before continuing. On Windows and Linux, close that dedicated browser yourself before continuing. Authentication and comparison reuse the same saved profile.
+5. Review the local titles and results. If no catalog is loaded, `Check list` can load the entered path or a sole discovered candidate; multiple candidates require a choice. Successful authentication also compares an existing scan automatically.
 
 Automatic discovery checks the entered path, `$CODEX_HOME/sqlite/codex-dev.db`, and `$HOME/.codex/sqlite/codex-dev.db`. An unset variable contributes no candidate. You can always enter a path explicitly; discovery itself does not scan database contents.
 
@@ -59,16 +59,16 @@ The local classification and web result answer different questions:
 
 | UI label | Meaning |
 | --- | --- |
-| `삭제 기록` | A matching local deletion marker was found. Web presence still protects the row. |
-| `검토 필요` | Manual review is required. Tick the row's `확인` acknowledgement before selecting it. |
-| `유지` | The current checks preserve this row; it is not eligible for selection. |
-| `웹에 있음` | The authenticated web check found the conversation. Cleanup is blocked for this row. |
-| `조회 불가` | A guarded direct check found it unavailable in the verified account/context. This is not proof of deletion. |
-| `미확인` | The app has no acceptable web evidence. Cleanup is blocked for this row. |
+| `Delete log` | A matching local deletion marker was found. Web presence still protects the row. |
+| `Review` | Manual review is required. Tick the row's `Done` acknowledgement before selecting it. |
+| `Keep` | The current checks preserve this row; it is not eligible for selection. |
+| `On web` | The authenticated web check found the conversation. Cleanup is blocked for this row. |
+| `Unavailable` | A guarded direct check found it unavailable in the verified account/context. This is not proof of deletion. |
+| `Not checked` | The app has no acceptable web evidence. Cleanup is blocked for this row. |
 
 The collector first looks for requested IDs in active, starred, and archived metadata. List presence protects a row; list absence proves nothing. Only IDs still unknown receive direct checks. A JSON `404` is accepted as unavailable only for a row bound to the verified personal user, without project or working-directory context, and with a separately confirmed direct JSON `200` control under the same local host. A host without that positive control cannot authorize negative evidence.
 
-A plain local row without deletion evidence that passes those unavailable checks becomes `검토 필요` even if its local missing flag is false. A missing flag alone never proves deletion. Web-present rows, project-context rows, foreign-account rows, and unverifiable rows cannot pass the cleanup gate. Account mismatches, incomplete responses, rate limits, and inconsistent results block cleanup.
+A plain local row without deletion evidence that passes those unavailable checks becomes `Review` even if its local missing flag is false. A missing flag alone never proves deletion. Web-present rows, project-context rows, foreign-account rows, and unverifiable rows cannot pass the cleanup gate. Account mismatches, incomplete responses, rate limits, and inconsistent results block cleanup.
 
 Comparison proof expires after five minutes and is invalidated by rescanning or source changes. A connected login alone does not authorize cleanup. See the [observed browser contract](docs/browser-contract.md) for the versioned evidence format and validation details.
 
@@ -76,10 +76,10 @@ Comparison proof expires after five minutes and is invalidated by rescanning or 
 
 Cleanup is available on Windows and macOS only, after the catalog and web checks pass.
 
-1. Review each eligible entry, acknowledge any `검토 필요` rows, and select the entries to remove.
-2. Click `백업 위치` (backup location) to inspect or edit the folder path in the popup, following the rules below.
-3. Quit the ChatGPT desktop app and its native helpers yourself; keep the connected browser open. The Chrome extension and Codex CUA runtimes can remain running. While entries are selected, the cleaner quietly checks desktop-app status automatically. A running or unknown status blocks cleanup; use `다시 확인` if the status is unknown, or `목록 확인` if the web comparison needs refreshing.
-4. Press the large `선택 N개 정리` button pinned at the bottom of the window to open the confirmation dialog. It explains the local catalog change and backup. Choose `취소` to keep the selection without cleaning, or `N개 정리` to proceed. Changes to the selection, review, source, backup folder, or web comparison invalidate an open dialog; the app rechecks prerequisites before accepting confirmation.
+1. Review each eligible entry, acknowledge any `Review` rows, and select the entries to remove.
+2. Click `Backup folder` to inspect or edit the folder path in the popup, following the rules below.
+3. Quit the ChatGPT desktop app and its native helpers yourself; keep the connected browser open. The Chrome extension and Codex CUA runtimes can remain running. While entries are selected, the cleaner quietly checks desktop-app status automatically. A running or unknown status blocks cleanup; use `Retry` if the status is unknown, or `Check list` if the web comparison needs refreshing.
+4. Press the large `Clean up N` button pinned at the bottom of the window to open the confirmation dialog. It explains the local catalog change and backup. Choose `Cancel` to keep the selection without cleaning, or `Clean up N` to proceed. Changes to the selection, review, source, backup folder, or web comparison invalidate an open dialog; the app rechecks prerequisites before accepting confirmation.
 5. Keep the app open until the operation ends. Retain the backup path and the displayed receipt details, including the SHA-256 hash and before/after row counts. There is no receipt export or automatic restore command.
 
 | Platform | Backup folder requirement |
@@ -111,9 +111,9 @@ Saved profiles are stored separately from the executable, under `browser-profile
 | Windows | `%LOCALAPPDATA%\Ghost Chat Cleaner` |
 | Linux | Absolute `$XDG_DATA_HOME/ghost-chat-cleaner`, otherwise `$HOME/.local/share/ghost-chat-cleaner` |
 
-Normal app quit closes its owned browser and preserves login. On restart, an existing profile is reauthenticated; a readiness marker is not current authentication proof. Press `연결 해제` (disconnect) to invalidate comparison proof and delete the active app-owned profile after its browser exit is confirmed. Without an active session, disconnect targets the current default product's saved profile. Other products' profiles, ordinary browser profiles, and catalog data remain untouched.
+Normal app quit closes its owned browser and preserves login. On restart, an existing profile is reauthenticated; a readiness marker is not current authentication proof. Press `Disconnect` to invalidate comparison proof and delete the active app-owned profile after its browser exit is confirmed. Without an active session, disconnect targets the current default product's saved profile. Other products' profiles, ordinary browser profiles, and catalog data remain untouched.
 
-Closing the dedicated login browser leaves the app waiting for an explicit `목록 확인`. Confirmed exit of the comparison browser clears connection and comparison proof without reopening it automatically. If a browser tab or target is lost, an explicit check enables reconnection through `로그인`. An ordinary comparison failure retains the connection for manual retry; expired authentication requires login again.
+Closing the dedicated login browser leaves the app waiting for an explicit `Check list`. Confirmed exit of the comparison browser clears connection and comparison proof without reopening it automatically. If a browser tab or target is lost, an explicit check enables reconnection through `Log in`. An ordinary comparison failure retains the connection for manual retry; expired authentication requires login again.
 
 Profile conflicts and unsafe storage block reuse. Do not manually remove `.ghost-chat-cleaner-browser-active` or the sibling `browser-locks/<product>.lock` to bypass an error. The [browser lifecycle and profile contract](docs/browser-contract.md#browser-login-lifecycle) documents recovery rules and the exact ownership boundaries.
 

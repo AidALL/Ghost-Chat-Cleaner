@@ -80,51 +80,155 @@ pub enum BrowserError {
     DefaultBrowser(crate::default_browser::DefaultBrowserError),
 }
 
+impl BrowserError {
+    pub fn message_for(&self, language: crate::i18n::Language) -> &'static str {
+        let (korean, english) = match self {
+            Self::LaunchFailed => ("브라우저를 열지 못함", "Could not open the browser"),
+            Self::StartupTimeout => (
+                "브라우저 연결이 오래 걸림. 다시 시도해야 함",
+                "Browser connection took too long. Try again",
+            ),
+            Self::InvalidEndpoint => (
+                "브라우저에 연결하지 못함",
+                "Could not connect to the browser",
+            ),
+            Self::ConnectionFailed => ("브라우저 연결에 실패함", "The browser connection failed"),
+            Self::TimedOut => (
+                "웹 확인 시간이 초과됨. 다시 시도해야 함",
+                "Web verification timed out. Try again",
+            ),
+            Self::ResponseLimit => (
+                "웹 응답을 모두 확인하지 못함",
+                "Could not check the full web response",
+            ),
+            Self::InvalidResponse => (
+                "웹 응답을 확인하지 못함",
+                "Could not verify the web response",
+            ),
+            Self::CommandFailed => (
+                "브라우저에서 요청을 처리하지 못함",
+                "The browser could not process the request",
+            ),
+            Self::NoChatGptTarget => (
+                "앱이 연 브라우저에서 ChatGPT에 로그인해야 함",
+                "Sign in to ChatGPT in the browser opened by this app",
+            ),
+            Self::AmbiguousTarget => (
+                "앱이 연 브라우저에 ChatGPT 탭을 하나만 남겨야 함",
+                "Keep only one ChatGPT tab in the browser opened by this app",
+            ),
+            Self::TargetChanged => (
+                "대조 중 ChatGPT 탭이 바뀌거나 닫힘",
+                "The ChatGPT tab changed or closed during comparison",
+            ),
+            Self::EvaluationFailed => (
+                "현재 ChatGPT 페이지에서 웹 대조를 실행하지 못함",
+                "Could not run web comparison on the current ChatGPT page",
+            ),
+            Self::PageNotReady => (
+                "ChatGPT 페이지가 아직 준비되지 않음",
+                "The ChatGPT page is not ready yet",
+            ),
+            Self::SyntaxError => (
+                "웹 확인 코드에 문법 오류가 있음",
+                "The web verification code contains a syntax error",
+            ),
+            Self::ReferenceError => (
+                "웹 확인에 필요한 항목을 찾지 못함",
+                "Could not find an item required for web verification",
+            ),
+            Self::TypeError => (
+                "웹 확인 중 자료 처리 오류가 발생함",
+                "A data processing error occurred during web verification",
+            ),
+            Self::ExpressionTooLarge => (
+                "웹 대조 요청량이 너무 많음",
+                "The web comparison request is too large",
+            ),
+            Self::Closed => ("브라우저 연결이 끊김", "The browser connection was lost"),
+            Self::LoginBrowserStillOpen => (
+                "로그인한 브라우저를 먼저 종료해야 함",
+                "Close the browser used to sign in first",
+            ),
+            Self::LoginInterrupted => (
+                "로그인 중 브라우저가 예기치 않게 종료됨",
+                "The browser closed unexpectedly during sign-in",
+            ),
+            Self::LoginRequired => ("로그인 필요", "Sign-in required"),
+            Self::AuthorizationDenied => (
+                "ChatGPT에서 연결 확인을 거부함",
+                "ChatGPT denied the connection check",
+            ),
+            Self::AccountChanged => (
+                "로그인 계정을 확인하지 못함",
+                "Could not verify the signed-in account",
+            ),
+            Self::SessionUserMismatch => (
+                "로그인 세션과 인증 사용자 정보가 일치하지 않음",
+                "The sign-in session and authenticated user do not match",
+            ),
+            Self::AccountMatchMismatch => (
+                "로그인 계정과 일치하는 계정을 확정하지 못함",
+                "Could not identify an account matching the signed-in account",
+            ),
+            Self::AccountMatchNone => (
+                "로그인 계정에 맞는 계정 항목이 없음",
+                "No account entry matches the signed-in account",
+            ),
+            Self::AccountMatchMultiple => (
+                "로그인 계정에 맞는 계정 항목이 여러 개임",
+                "Multiple account entries match the signed-in account",
+            ),
+            Self::OrderedPersonalAccountIdMissing => (
+                "개인 계정 항목에 계정 ID가 없음",
+                "The personal account entry has no account ID",
+            ),
+            Self::OrderedPersonalAccountIdMissingBound => (
+                "개인 계정 ID 없음 · 로그인 계정 일치",
+                "Personal account ID missing; signed-in account matches",
+            ),
+            Self::OrderedPersonalAccountIdMissingUnbound => (
+                "개인 계정 ID 없음 · 로그인 계정 미확인",
+                "Personal account ID missing; signed-in account unverified",
+            ),
+            Self::AccountUserMismatch => (
+                "계정과 로그인 사용자 연결이 일치하지 않음",
+                "The account and signed-in user association do not match",
+            ),
+            Self::FinalIdentityChanged => (
+                "확인 중 로그인 계정이 바뀜",
+                "The signed-in account changed during verification",
+            ),
+            Self::UnsupportedAccount => (
+                "현재 계정 유형은 지원하지 않음",
+                "This account type is not supported",
+            ),
+            Self::ResponseSchemaChanged => (
+                "ChatGPT 응답 형식이 예상과 다름",
+                "The ChatGPT response format differs from the expected format",
+            ),
+            Self::RateLimited => (
+                "요청이 많아 잠시 후 다시 확인 필요",
+                "Too many requests. Wait a moment, then check again",
+            ),
+            Self::WebUnavailable => (
+                "ChatGPT 응답을 받지 못함",
+                "No response received from ChatGPT",
+            ),
+            Self::InvalidCollectorRequest => (
+                "웹 확인 요청을 처리할 수 없음",
+                "The web verification request could not be processed",
+            ),
+            Self::DefaultBrowser(error) => return error.message_for(language),
+            Self::Profile(error) => return error.message_for(language),
+        };
+        language.text(korean, english)
+    }
+}
+
 impl fmt::Display for BrowserError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::LaunchFailed => "브라우저를 열지 못함",
-            Self::StartupTimeout => "브라우저 연결이 오래 걸림. 다시 시도해야 함",
-            Self::InvalidEndpoint => "브라우저에 연결하지 못함",
-            Self::ConnectionFailed => "브라우저 연결에 실패함",
-            Self::TimedOut => "웹 확인 시간이 초과됨. 다시 시도해야 함",
-            Self::ResponseLimit => "웹 응답을 모두 확인하지 못함",
-            Self::InvalidResponse => "웹 응답을 확인하지 못함",
-            Self::CommandFailed => "브라우저에서 요청을 처리하지 못함",
-            Self::NoChatGptTarget => "앱이 연 브라우저에서 ChatGPT에 로그인해야 함",
-            Self::AmbiguousTarget => "앱이 연 브라우저에 ChatGPT 탭을 하나만 남겨야 함",
-            Self::TargetChanged => "대조 중 ChatGPT 탭이 바뀌거나 닫힘",
-            Self::EvaluationFailed => "현재 ChatGPT 페이지에서 웹 대조를 실행하지 못함",
-            Self::PageNotReady => "ChatGPT 페이지가 아직 준비되지 않음",
-            Self::SyntaxError => "웹 확인 코드에 문법 오류가 있음",
-            Self::ReferenceError => "웹 확인에 필요한 항목을 찾지 못함",
-            Self::TypeError => "웹 확인 중 자료 처리 오류가 발생함",
-            Self::ExpressionTooLarge => "웹 대조 요청량이 너무 많음",
-            Self::Closed => "브라우저 연결이 끊김",
-            Self::LoginBrowserStillOpen => "로그인한 브라우저를 먼저 종료해야 함",
-            Self::LoginInterrupted => "로그인 중 브라우저가 예기치 않게 종료됨",
-            Self::DefaultBrowser(error) => return error.fmt(formatter),
-            Self::Profile(error) => return error.fmt(formatter),
-            Self::LoginRequired => "로그인 필요",
-            Self::AuthorizationDenied => "ChatGPT에서 연결 확인을 거부함",
-            Self::AccountChanged => "로그인 계정을 확인하지 못함",
-            Self::SessionUserMismatch => "로그인 세션과 인증 사용자 정보가 일치하지 않음",
-            Self::AccountMatchMismatch => "로그인 계정과 일치하는 계정을 확정하지 못함",
-            Self::AccountMatchNone => "로그인 계정에 맞는 계정 항목이 없음",
-            Self::AccountMatchMultiple => "로그인 계정에 맞는 계정 항목이 여러 개임",
-            Self::OrderedPersonalAccountIdMissing => "개인 계정 항목에 계정 ID가 없음",
-            Self::OrderedPersonalAccountIdMissingBound => "개인 계정 ID 없음 · 로그인 계정 일치",
-            Self::OrderedPersonalAccountIdMissingUnbound => {
-                "개인 계정 ID 없음 · 로그인 계정 미확인"
-            }
-            Self::AccountUserMismatch => "계정과 로그인 사용자 연결이 일치하지 않음",
-            Self::FinalIdentityChanged => "확인 중 로그인 계정이 바뀜",
-            Self::UnsupportedAccount => "현재 계정 유형은 지원하지 않음",
-            Self::ResponseSchemaChanged => "ChatGPT 응답 형식이 예상과 다름",
-            Self::RateLimited => "요청이 많아 잠시 후 다시 확인 필요",
-            Self::WebUnavailable => "ChatGPT 응답을 받지 못함",
-            Self::InvalidCollectorRequest => "웹 확인 요청을 처리할 수 없음",
-        })
+        formatter.write_str(self.message_for(crate::i18n::Language::Korean))
     }
 }
 

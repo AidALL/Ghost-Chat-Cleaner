@@ -4,6 +4,7 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::i18n::Language;
 use crate::model::{Classification, RepairReceipt, ScanReport, ThreadIdentity};
 use crate::platform::PlatformPolicy;
 use crate::process_guard::ProcessPresence;
@@ -174,7 +175,10 @@ pub enum ErrorOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppError {
+    /// Default Korean text retained for callers that do not select a language.
     pub message: String,
+    pub message_en: Option<String>,
+    pub details: Option<String>,
     pub outcome: ErrorOutcome,
     pub authentication_expired: bool,
     pub authentication_retryable: bool,
@@ -184,9 +188,28 @@ pub struct AppError {
 }
 
 impl AppError {
+    pub fn with_english(mut self, message: impl Into<String>) -> Self {
+        self.message_en = Some(message.into());
+        self
+    }
+
+    pub fn with_details(mut self, details: impl Into<String>) -> Self {
+        self.details = Some(details.into());
+        self
+    }
+
+    pub fn message_for(&self, language: Language) -> &str {
+        match language {
+            Language::Korean => &self.message,
+            Language::English => self.message_en.as_deref().unwrap_or(&self.message),
+        }
+    }
+
     pub fn no_data_change(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            message_en: None,
+            details: None,
             outcome: ErrorOutcome::NoDataChange,
             authentication_expired: false,
             authentication_retryable: false,
@@ -199,6 +222,8 @@ impl AppError {
     pub fn outcome_uncertain(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            message_en: None,
+            details: None,
             outcome: ErrorOutcome::OutcomeUncertain,
             authentication_expired: false,
             authentication_retryable: false,
@@ -211,6 +236,8 @@ impl AppError {
     pub fn login_required(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            message_en: None,
+            details: None,
             outcome: ErrorOutcome::NoDataChange,
             authentication_expired: true,
             authentication_retryable: false,
@@ -224,6 +251,7 @@ impl AppError {
         Self {
             login_browser_still_open: true,
             ..Self::no_data_change("로그인한 브라우저를 닫은 뒤 목록 확인 필요")
+                .with_english("Close the login browser, then check the conversation list")
         }
     }
 
@@ -237,7 +265,7 @@ impl AppError {
     pub fn browser_closed() -> Self {
         Self {
             browser_closed: true,
-            ..Self::no_data_change("브라우저가 종료됨")
+            ..Self::no_data_change("브라우저가 종료됨").with_english("The browser has closed")
         }
     }
 
@@ -448,9 +476,10 @@ impl AppState {
             self.web_comparison = Some(proof);
         } else {
             self.web_comparison = None;
-            self.error = Some(AppError::no_data_change(
-                "웹 대조 중 로컬 스캔 결과가 바뀜. 다시 대조해야 함",
-            ));
+            self.error = Some(
+                AppError::no_data_change("웹 대조 중 로컬 스캔 결과가 바뀜. 다시 대조해야 함")
+                    .with_english("The local scan changed during web comparison. Compare again"),
+            );
         }
     }
 
@@ -1062,6 +1091,66 @@ mod tests {
 
     use super::*;
     use crate::model::{CatalogThread, DeletionEvidence, LocalPath, SchemaReport};
+
+    #[test]
+    fn stored_error_switches_language_without_changing_flags_or_details() {
+        let mut state = AppState::new(RunMode::Demo, PlatformPolicy::MacOs);
+        let error = AppError::outcome_uncertain("정리 결과를 확인하지 못함")
+            .with_english("Could not confirm the cleanup result")
+            .with_details("preserved backup: /synthetic/backups/catalog.db");
+        state.set_error(error.clone());
+        let stored = state.error().unwrap();
+        assert_eq!(stored.message_for(Language::Korean), error.message);
+        assert_eq!(
+            stored.message_for(Language::English),
+            "Could not confirm the cleanup result"
+        );
+        assert_eq!(state.error(), Some(&error));
+        assert_eq!(stored.outcome, ErrorOutcome::OutcomeUncertain);
+        assert_eq!(
+            stored.details.as_deref(),
+            Some("preserved backup: /synthetic/backups/catalog.db")
+        );
+        for error in [
+            AppError::login_required("로그인 필요"),
+            AppError::retryable_authentication("다시 확인 필요"),
+            AppError::login_browser_still_open(),
+            AppError::browser_closed(),
+            AppError::browser_reconnect_required("다시 연결 필요"),
+        ] {
+            let localized = error.clone().with_english("English explanation");
+            assert_eq!(
+                localized.message_for(Language::English),
+                "English explanation"
+            );
+            assert_eq!(localized.outcome, error.outcome);
+            assert_eq!(
+                localized.authentication_expired,
+                error.authentication_expired
+            );
+            assert_eq!(
+                localized.authentication_retryable,
+                error.authentication_retryable
+            );
+            assert_eq!(
+                localized.login_browser_still_open,
+                error.login_browser_still_open
+            );
+            assert_eq!(localized.browser_closed, error.browser_closed);
+            assert_eq!(
+                localized.browser_reconnect_required,
+                error.browser_reconnect_required
+            );
+        }
+    }
+
+    #[test]
+    fn untranslated_custom_error_keeps_its_original_text() {
+        let error = AppError::no_data_change("custom diagnostic");
+        assert_eq!(error.message_for(Language::Korean), "custom diagnostic");
+        assert_eq!(error.message_for(Language::English), "custom diagnostic");
+        assert_eq!(error.details, None);
+    }
 
     fn large_report(count: usize) -> ScanReport {
         let evidence_path = LocalPath::try_from(Path::new("/synthetic/deletion.log"))

@@ -31,19 +31,45 @@ pub enum ProfileError {
     Io,
 }
 
+impl ProfileError {
+    pub fn message_for(&self, language: crate::i18n::Language) -> &'static str {
+        let (korean, english) = match self {
+            Self::UnsupportedProduct => (
+                "기본 브라우저를 Chrome·Edge·Chromium 중 하나로 설정해야 함",
+                "Set Chrome, Edge, or Chromium as your default browser",
+            ),
+            Self::MissingDataDirectory => (
+                "로그인을 저장할 위치를 찾지 못함",
+                "Could not find a location to save the sign-in",
+            ),
+            Self::UnsafePath => (
+                "저장된 로그인을 안전하게 사용할 수 없음",
+                "The saved sign-in cannot be used safely",
+            ),
+            Self::InUse => (
+                "다른 앱 창에서 로그인 사용 중",
+                "Another app window is using the saved sign-in",
+            ),
+            Self::UnconfirmedExit => (
+                "이전 브라우저 종료를 확인하지 못함",
+                "Could not confirm that the previous browser has closed",
+            ),
+            Self::InvalidMarker => (
+                "저장된 로그인 상태를 확인하지 못함",
+                "Could not verify the saved sign-in state",
+            ),
+            Self::Io => (
+                "저장된 로그인에 접근하지 못함",
+                "Could not access the saved sign-in",
+            ),
+        };
+        language.text(korean, english)
+    }
+}
+
 impl fmt::Display for ProfileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::UnsupportedProduct => {
-                "기본 브라우저를 Chrome·Edge·Chromium 중 하나로 설정해야 함"
-            }
-            Self::MissingDataDirectory => "로그인을 저장할 위치를 찾지 못함",
-            Self::UnsafePath => "저장된 로그인을 안전하게 사용할 수 없음",
-            Self::InUse => "다른 앱 창에서 로그인 사용 중",
-            Self::UnconfirmedExit => "이전 브라우저 종료를 확인하지 못함",
-            Self::InvalidMarker => "저장된 로그인 상태를 확인하지 못함",
-            Self::Io => "저장된 로그인에 접근하지 못함",
-        })
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message_for(crate::i18n::Language::Korean))
     }
 }
 

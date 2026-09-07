@@ -9,6 +9,7 @@ use crate::app_state::{
     AppError, AppState, BrowserState, ErrorOutcome, JobEvent, JobId, Operation, ProcessState,
     RepairBlocker, RepairConfirmation, RunMode,
 };
+use crate::i18n::{load_language, save_language, Language};
 use crate::model::{
     CatalogThread, Classification, DeletionEvidence, LocalPath, RepairReceipt, ScanReport,
     SchemaReport, ThreadIdentity,
@@ -30,12 +31,12 @@ enum ResultFilter {
 impl ResultFilter {
     const ALL: [Self; 4] = [Self::All, Self::Confirmed, Self::Review, Self::Preserved];
 
-    const fn label(self) -> &'static str {
+    fn label(self, language: Language) -> &'static str {
         match self {
-            Self::All => "전체",
-            Self::Confirmed => "삭제 기록",
-            Self::Review => "검토 필요",
-            Self::Preserved => "유지",
+            Self::All => language.text("전체", "All"),
+            Self::Confirmed => language.text("삭제 기록", "Delete log"),
+            Self::Review => language.text("검토 필요", "Review"),
+            Self::Preserved => language.text("유지", "Keep"),
         }
     }
 
@@ -50,6 +51,9 @@ impl ResultFilter {
 }
 
 pub struct GhostChatApp {
+    language: Language,
+    persist_language: bool,
+    language_save_warning: Option<String>,
     state: AppState,
     worker: Option<LiveWorker>,
     filter: ResultFilter,
@@ -77,7 +81,15 @@ impl GhostChatApp {
             state.set_backup_directory_input("/demo/backups");
         }
 
+        let persist_language = run_mode == RunMode::Live && !cfg!(test);
         let mut app = Self {
+            language: if persist_language {
+                load_language()
+            } else {
+                Language::Korean
+            },
+            persist_language,
+            language_save_warning: None,
             state,
             worker,
             filter: ResultFilter::All,
@@ -108,11 +120,13 @@ impl GhostChatApp {
                         self.worker_disconnected = true;
                         self.pending_list_check = false;
                         let app_error = if self.state.operation() == Operation::Repairing {
-                            AppError::outcome_uncertain(format!("정리 중 작업이 중단됨: {error}"))
+                            AppError::outcome_uncertain("정리 중 작업이 중단됨")
+                                .with_english("The cleanup task was interrupted")
+                                .with_details(error.to_string())
                         } else {
-                            AppError::no_data_change(format!(
-                                "백그라운드 작업 연결이 종료됨: {error}"
-                            ))
+                            AppError::no_data_change("백그라운드 작업 연결이 종료됨")
+                                .with_english("The background worker disconnected")
+                                .with_details(error.to_string())
                         };
                         if let Some(job_id) = self.state.active_job() {
                             self.state.fail_active(job_id, app_error);
@@ -194,8 +208,10 @@ impl GhostChatApp {
             return None;
         }
         if discovery_count == Some(0) {
-            self.state
-                .set_error(AppError::no_data_change("대화 목록 파일을 찾지 못함"));
+            self.state.set_error(
+                AppError::no_data_change("대화 목록 파일을 찾지 못함")
+                    .with_english("No conversation list file was found"),
+            );
         }
         if let Some(database_path) = scanned_path {
             if self.state.backup_directory_input().trim().is_empty() {
@@ -210,9 +226,10 @@ impl GhostChatApp {
             }
             self.pending_list_check = false;
             if count > 1 {
-                self.state.set_error(AppError::no_data_change(
-                    "찾은 파일 중 하나를 선택한 뒤 목록 확인 필요",
-                ));
+                self.state.set_error(
+                    AppError::no_data_change("찾은 파일 중 하나를 선택한 뒤 목록 확인 필요")
+                        .with_english("Choose one of the files found, then select Check list"),
+                );
             }
             return None;
         }
@@ -229,7 +246,7 @@ impl GhostChatApp {
         let result = self
             .worker
             .as_ref()
-            .ok_or_else(|| "작업을 시작할 수 없음".to_owned())
+            .ok_or_else(|| "Worker is unavailable".to_owned())
             .and_then(|worker| {
                 worker
                     .submit(job_id, request)
@@ -239,7 +256,9 @@ impl GhostChatApp {
             self.pending_list_check = false;
             self.state.fail_active(
                 job_id,
-                AppError::no_data_change(format!("백그라운드 작업을 시작하지 못함: {error}")),
+                AppError::no_data_change("백그라운드 작업을 시작하지 못함")
+                    .with_english("Could not start the background task")
+                    .with_details(error),
             );
         }
     }
@@ -301,8 +320,10 @@ impl GhostChatApp {
             }
             Err(error) => {
                 self.pending_list_check = false;
-                self.state
-                    .set_error(AppError::no_data_change(error.to_string()));
+                self.state.set_error(
+                    AppError::no_data_change(error.message_for(Language::Korean))
+                        .with_english(error.message_for(Language::English)),
+                );
                 None
             }
         }
@@ -342,8 +363,10 @@ impl GhostChatApp {
     fn request_browser_login(&mut self) {
         self.pending_list_check = false;
         if self.state.run_mode() == RunMode::Demo {
-            self.state
-                .set_error(AppError::no_data_change("예시 화면에서는 로그인할 수 없음"));
+            self.state.set_error(
+                AppError::no_data_change("예시 화면에서는 로그인할 수 없음")
+                    .with_english("Login is unavailable in the demo"),
+            );
             return;
         }
         let job_id = self.state.begin(Operation::OpeningBrowser);
@@ -472,10 +495,19 @@ impl GhostChatApp {
     fn request_repair(&mut self) {
         self.repair_confirmation = self.state.prepare_repair_confirmation();
         if self.repair_confirmation.is_none() {
-            self.state.set_error(AppError::no_data_change(
-                self.repair_instruction(Instant::now())
-                    .unwrap_or_else(|| "현재 선택한 항목을 정리할 수 없음".to_owned()),
-            ));
+            let now = Instant::now();
+            self.state.set_error(
+                AppError::no_data_change(
+                    self.repair_instruction_for(now, Language::Korean)
+                        .unwrap_or_else(|| "현재 선택한 항목을 정리할 수 없음".to_owned()),
+                )
+                .with_english(
+                    self.repair_instruction_for(now, Language::English)
+                        .unwrap_or_else(|| {
+                            "The selected items cannot be cleaned up right now".to_owned()
+                        }),
+                ),
+            );
         }
     }
 
@@ -485,10 +517,19 @@ impl GhostChatApp {
 
     fn invalidate_repair_confirmation(&mut self) {
         self.cancel_repair_confirmation();
-        self.state.set_error(AppError::no_data_change(
-            self.repair_instruction(Instant::now())
-                .unwrap_or_else(|| "선택 또는 정리 조건이 바뀜 · 다시 확인 필요".to_owned()),
-        ));
+        let now = Instant::now();
+        self.state.set_error(
+            AppError::no_data_change(
+                self.repair_instruction_for(now, Language::Korean)
+                    .unwrap_or_else(|| "선택 또는 정리 조건이 바뀜 · 다시 확인 필요".to_owned()),
+            )
+            .with_english(
+                self.repair_instruction_for(now, Language::English)
+                    .unwrap_or_else(|| {
+                        "Selection or cleanup conditions changed · check again".to_owned()
+                    }),
+            ),
+        );
     }
 
     fn accept_repair_confirmation(&mut self) {
@@ -530,8 +571,10 @@ impl GhostChatApp {
         }
 
         let Some(report) = self.state.report().cloned() else {
-            self.state
-                .set_error(AppError::no_data_change("불러온 대화 없음"));
+            self.state.set_error(
+                AppError::no_data_change("불러온 대화 없음")
+                    .with_english("No conversations loaded"),
+            );
             return;
         };
         let request = WorkerRequest::repair(
@@ -546,118 +589,197 @@ impl GhostChatApp {
                 let job_id = self.state.begin(Operation::Repairing);
                 self.submit_live(job_id, request);
             }
-            Err(error) => self
-                .state
-                .set_error(AppError::no_data_change(error.to_string())),
+            Err(error) => self.state.set_error(
+                AppError::no_data_change(error.message_for(Language::Korean))
+                    .with_english(error.message_for(Language::English)),
+            ),
         }
     }
 
-    fn render_header(&self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.heading("Ghost Chat Cleaner");
-            if self.state.run_mode() == RunMode::Demo {
-                ui.label("예시 데이터");
-            }
-            if self.state.operation().is_foreground() {
-                ui.spinner();
-                ui.label(operation_label(self.state.operation()));
+    fn set_language(&mut self, language: Language) {
+        self.set_language_with_save(language, save_language);
+    }
+
+    fn set_language_with_save(
+        &mut self,
+        language: Language,
+        save: impl FnOnce(Language) -> io::Result<()>,
+    ) {
+        if self.language == language {
+            return;
+        }
+        self.language = language;
+        if self.persist_language {
+            self.language_save_warning = save(language).err().map(|error| error.to_string());
+        }
+    }
+
+    fn render_language_save_warning(&self, ui: &mut egui::Ui) {
+        if let Some(details) = &self.language_save_warning {
+            ui.colored_label(
+                Color32::from_rgb(180, 126, 16),
+                self.language.text(
+                    "언어 설정을 저장하지 못함 · 이번 실행에는 적용됨",
+                    "Could not save the language preference · applied for this session",
+                ),
+            )
+            .on_hover_text(details);
+        }
+    }
+
+    fn render_language_selector(&mut self, ui: &mut egui::Ui) {
+        ui.push_id("language-selector", |ui| {
+            for (language, label) in [(Language::English, "English"), (Language::Korean, "한국어")]
+            {
+                if ui
+                    .selectable_label(self.language == language, label)
+                    .clicked()
+                {
+                    self.set_language(language);
+                    ui.ctx().request_repaint();
+                }
             }
         });
-        if self.state.platform() == PlatformPolicy::Linux {
-            ui.label("Linux · 조회만 가능");
-        }
+    }
+
+    fn render_header(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(12, 0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Ghost Chat Cleaner");
+                    if self.state.run_mode() == RunMode::Demo {
+                        ui.label(self.language.text("예시 데이터", "Demo data"));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        self.render_language_selector(ui);
+                    });
+                });
+                self.render_language_save_warning(ui);
+                if self.state.operation().is_foreground() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(operation_label(self.state.operation(), self.language));
+                    });
+                }
+                if self.state.platform() == PlatformPolicy::Linux {
+                    ui.label(
+                        self.language
+                            .text("Linux · 조회만 가능", "Linux · read only"),
+                    );
+                }
+            });
     }
 
     fn render_source(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
         let busy = self.state.operation().is_foreground();
-        section(ui, "대화 목록 파일", |ui| {
-            ui.horizontal(|ui| {
-                let mut database = self.state.database_input().to_owned();
-                let response = ui.add_enabled(
-                    !busy,
-                    egui::TextEdit::singleline(&mut database)
-                        .desired_width((ui.available_width() - 190.0).max(120.0))
-                        .hint_text("파일 경로"),
-                );
-                if response.changed() {
-                    self.set_database_source(database);
-                }
-                if ui
-                    .add_enabled(!busy, egui::Button::new("자동 찾기"))
-                    .clicked()
-                {
-                    self.request_discovery();
-                }
-                if ui
-                    .add_enabled(!busy, egui::Button::new("불러오기"))
-                    .clicked()
-                {
-                    self.request_scan();
-                }
-            });
-
-            if self.state.discovered_paths().len() > 1 {
-                let paths = self.state.discovered_paths().to_vec();
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("찾은 파일:");
-                    for path in paths {
-                        let text = path.to_string_lossy();
-                        if ui
-                            .add_enabled(!busy, egui::Button::new(text.as_ref()).small())
-                            .on_hover_text(text.as_ref())
-                            .clicked()
-                        {
-                            self.set_database_source(text.into_owned());
-                        }
+        section(
+            ui,
+            language.text("대화 목록 파일", "Conversation list file"),
+            |ui| {
+                ui.horizontal(|ui| {
+                    let mut database = self.state.database_input().to_owned();
+                    let response = ui.add_enabled(
+                        !busy,
+                        egui::TextEdit::singleline(&mut database)
+                            .id_salt("database-path")
+                            .desired_width((ui.available_width() - 190.0).max(120.0))
+                            .hint_text(language.text("파일 경로", "File path")),
+                    );
+                    if response.changed() {
+                        self.set_database_source(database);
+                    }
+                    if ui
+                        .add_enabled(
+                            !busy,
+                            egui::Button::new(language.text("자동 찾기", "Find file")),
+                        )
+                        .clicked()
+                    {
+                        self.request_discovery();
+                    }
+                    if ui
+                        .add_enabled(!busy, egui::Button::new(language.text("불러오기", "Load")))
+                        .clicked()
+                    {
+                        self.request_scan();
                     }
                 });
-            }
 
-            ui.collapsing("추가 설정", |ui| {
-                ui.label("삭제 기록 폴더 (선택)");
-                let mut log_roots = self.state.log_roots_input().to_owned();
-                let response = ui.add_enabled(
-                    !busy,
-                    egui::TextEdit::multiline(&mut log_roots)
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("경로를 한 줄에 하나씩 입력"),
-                );
-                if response.changed() {
-                    self.pending_list_check = false;
-                    self.state.set_log_roots_input(log_roots);
+                if self.state.discovered_paths().len() > 1 {
+                    let paths = self.state.discovered_paths().to_vec();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(language.text("찾은 파일:", "Files found:"));
+                        for path in paths {
+                            let text = path.to_string_lossy();
+                            if ui
+                                .add_enabled(!busy, egui::Button::new(text.as_ref()).small())
+                                .on_hover_text(text.as_ref())
+                                .clicked()
+                            {
+                                self.set_database_source(text.into_owned());
+                            }
+                        }
+                    });
                 }
-            });
-        });
+
+                egui::CollapsingHeader::new(language.text("추가 설정", "Settings"))
+                    .id_salt("source-settings")
+                    .show(ui, |ui| {
+                        ui.label(
+                            language
+                                .text("삭제 기록 폴더 (선택)", "Deletion log folders (optional)"),
+                        );
+                        let mut log_roots = self.state.log_roots_input().to_owned();
+                        let response =
+                            ui.add_enabled(
+                                !busy,
+                                egui::TextEdit::multiline(&mut log_roots)
+                                    .id_salt("log-roots")
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text(language.text(
+                                        "경로를 한 줄에 하나씩 입력",
+                                        "Enter one path per line",
+                                    )),
+                            );
+                        if response.changed() {
+                            self.pending_list_check = false;
+                            self.state.set_log_roots_input(log_roots);
+                        }
+                    });
+            },
+        );
     }
 
     fn render_results(&mut self, ui: &mut egui::Ui) {
-        section(ui, "대화 목록", |ui| {
+        let language = self.language;
+        section(ui, language.text("대화 목록", "Conversations"), |ui| {
             let Some(thread_count) = self.state.report().map(|report| report.threads.len()) else {
-                ui.label("불러온 대화 없음");
+                ui.label(language.text("불러온 대화 없음", "No conversations loaded"));
                 return;
             };
 
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "전체 {}개 · 선택 {}개",
-                    thread_count,
-                    self.state.selected().len()
-                ));
+                ui.label(match language {
+                    Language::Korean => format!("전체 {thread_count}개 · 선택 {}개", self.state.selected().len()),
+                    Language::English => format!("{} · {} selected", counted_items(thread_count), self.state.selected().len()),
+                });
                 ui.separator();
                 egui::ComboBox::from_id_salt("result-filter")
-                    .selected_text(self.filter.label())
+                    .selected_text(self.filter.label(language))
                     .show_ui(ui, |ui| {
                         for filter in ResultFilter::ALL {
-                            ui.selectable_value(&mut self.filter, filter, filter.label());
+                            ui.selectable_value(&mut self.filter, filter, filter.label(language));
                         }
                     });
                 if ui
                     .add_enabled(
                         !self.state.operation().is_foreground(),
-                        egui::Button::new("자동 선택"),
+                        egui::Button::new(language.text("자동 선택", "Auto-select")),
                     )
-                    .on_hover_text("삭제 기록이 있는 정리 후보 선택 · 웹에 있는 대화 제외")
+                    .on_hover_text(language.text("삭제 기록이 있는 정리 후보 선택 · 웹에 있는 대화 제외", "Select cleanup candidates with deletion records · exclude conversations found on the web"))
                     .clicked()
                 {
                     self.state.select_all_confirmed();
@@ -666,7 +788,7 @@ impl GhostChatApp {
                     .add_enabled(
                         !self.state.operation().is_foreground()
                             && !self.state.selected().is_empty(),
-                        egui::Button::new("선택 해제"),
+                        egui::Button::new(language.text("선택 해제", "Clear selection")),
                     )
                     .clicked()
                 {
@@ -697,7 +819,7 @@ impl GhostChatApp {
                 .column(Column::initial(88.0).at_least(76.0).clip(true))
                 .column(Column::initial(90.0).at_least(76.0).clip(true))
                 .header(24.0, |mut header| {
-                    for title in ["검토", "선택", "제목", "상태", "웹 확인"] {
+                    for title in [language.text("검토", "Review"), language.text("선택", "Select"), language.text("제목", "Title"), language.text("상태", "Status"), language.text("웹 확인", "Web check")] {
                         header.col(|ui| {
                             ui.strong(title);
                         });
@@ -711,14 +833,14 @@ impl GhostChatApp {
                         row.col(|ui| match classification {
                             Classification::ReviewRequired => {
                                 let mut reviewed = state.reviewed().contains(identity);
-                                let label = review_checkbox_label(thread);
+                                let label = review_checkbox_label(thread, language, state.run_mode());
                                 let response = ui
                                     .push_id(
                                         ("review", &identity.host_id, &identity.thread_id),
                                         |ui| {
                                             ui.add_enabled(
                                                 !state.operation().is_foreground(),
-                                                egui::Checkbox::new(&mut reviewed, "확인"),
+                                                egui::Checkbox::new(&mut reviewed, language.text("확인", "Done")),
                                             )
                                         },
                                     )
@@ -733,7 +855,7 @@ impl GhostChatApp {
                                 });
                                 if response
                                     .on_hover_text(format!(
-                                        "{label}\n내용을 직접 검토했다는 별도 확인"
+                                        "{label}\n{}", language.text("내용을 직접 검토했다는 별도 확인", "Confirm that you have personally reviewed the content")
                                     ))
                                     .changed()
                                 {
@@ -748,7 +870,7 @@ impl GhostChatApp {
                             let mut selected = state.selected().contains(identity);
                             let enabled =
                                 !state.operation().is_foreground() && state.is_selectable(identity);
-                            let label = selection_checkbox_label(thread);
+                            let label = selection_checkbox_label(thread, language, state.run_mode());
                             let response = ui
                                 .push_id(("select", &identity.host_id, &identity.thread_id), |ui| {
                                     ui.add_enabled(
@@ -767,9 +889,9 @@ impl GhostChatApp {
                             });
                             if response
                                 .on_hover_text(if enabled {
-                                    format!("{label}\n정리할 항목 선택")
+                                    format!("{label}\n{}", language.text("정리할 항목 선택", "Select this item for cleanup"))
                                 } else {
-                                    format!("{label}\n검토 확인이 필요하거나 선택할 수 없는 항목")
+                                    format!("{label}\n{}", language.text("검토 확인이 필요하거나 선택할 수 없는 항목", "Review confirmation is required, or this item cannot be selected"))
                                 })
                                 .changed()
                             {
@@ -779,7 +901,7 @@ impl GhostChatApp {
                         row.col(|ui| {
                             let mut details = format!(
                                 "{}\n{}\n{}",
-                                thread.display_title(),
+                                display_title(thread, language, state.run_mode()),
                                 identity.host_id,
                                 identity.thread_id
                             );
@@ -790,14 +912,14 @@ impl GhostChatApp {
                                     evidence.source_path.as_path().display()
                                 ));
                             }
-                            ui.add(egui::Label::new(thread.display_title()).truncate())
+                            ui.add(egui::Label::new(display_title(thread, language, state.run_mode())).truncate())
                                 .on_hover_text(details);
                         });
                         row.col(|ui| {
                             if classification != thread.classification() {
-                                ui.label("검토 필요");
+                                ui.label(language.text("검토 필요", "Review"));
                             } else {
-                                classification_label(ui, classification);
+                                classification_label(ui, classification, language);
                             }
                         });
                         row.col(|ui| {
@@ -805,9 +927,9 @@ impl GhostChatApp {
                                 "—"
                             } else {
                                 match state.web_verdict(identity) {
-                                    WebVerdict::Present => "웹에 있음",
-                                    WebVerdict::Unavailable => "조회 불가",
-                                    WebVerdict::Unknown => "미확인",
+                                    WebVerdict::Present => language.text("웹에 있음", "On web"),
+                                    WebVerdict::Unavailable => language.text("조회 불가", "Unavailable"),
+                                    WebVerdict::Unknown => language.text("미확인", "Not checked"),
                                 }
                             });
                         });
@@ -824,6 +946,7 @@ impl GhostChatApp {
     }
 
     fn render_web(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
         let busy = self.state.operation().is_foreground();
         let demo = self.state.run_mode() == RunMode::Demo;
         egui::Frame::group(ui.style())
@@ -831,7 +954,7 @@ impl GhostChatApp {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.heading("ChatGPT 연결");
+                    ui.heading(language.text("ChatGPT 연결", "ChatGPT connection"));
                     if ui
                         .add_enabled(
                             !busy
@@ -842,33 +965,46 @@ impl GhostChatApp {
                                         | BrowserState::Expired
                                         | BrowserState::AwaitingVerification
                                 ),
-                            egui::Button::new("로그인"),
+                            egui::Button::new(language.text("로그인", "Log in")),
                         )
                         .clicked()
                     {
                         self.request_browser_login();
                     }
                     if ui
-                        .add_enabled(self.can_check_list(), egui::Button::new("목록 확인"))
+                        .add_enabled(
+                            self.can_check_list(),
+                            egui::Button::new(language.text("목록 확인", "Check list")),
+                        )
                         .clicked()
                     {
                         self.request_list_check();
                     }
                     if ui
-                        .add_enabled(!busy && !demo, egui::Button::new("연결 해제"))
-                        .on_hover_text("전용 브라우저를 닫고 이 앱에 저장된 로그인 삭제")
+                        .add_enabled(
+                            !busy && !demo,
+                            egui::Button::new(language.text("연결 해제", "Disconnect")),
+                        )
+                        .on_hover_text(language.text(
+                            "전용 브라우저를 닫고 이 앱에 저장된 로그인 삭제",
+                            "Close the dedicated browser and remove the login saved by this app",
+                        ))
                         .clicked()
                     {
                         self.request_browser_disconnect();
                     }
                     if !demo {
                         ui.label(match self.state.browser_state() {
-                            BrowserState::Disconnected => "연결 안 됨",
-                            BrowserState::LoginOpen => "확인 대기",
-                            BrowserState::Connecting => "연결 중",
-                            BrowserState::AwaitingVerification => "연결 확인 필요",
-                            BrowserState::Connected => "연결됨",
-                            BrowserState::Expired => "로그인 필요",
+                            BrowserState::Disconnected => {
+                                language.text("연결 안 됨", "Disconnected")
+                            }
+                            BrowserState::LoginOpen => language.text("확인 대기", "Waiting"),
+                            BrowserState::Connecting => language.text("연결 중", "Connecting"),
+                            BrowserState::AwaitingVerification => {
+                                language.text("연결 확인 필요", "Verification needed")
+                            }
+                            BrowserState::Connected => language.text("연결됨", "Connected"),
+                            BrowserState::Expired => language.text("로그인 필요", "Login needed"),
                         });
                     }
                 });
@@ -876,6 +1012,7 @@ impl GhostChatApp {
     }
 
     fn render_repair(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
         if self.state.report().is_none() {
             return;
         }
@@ -884,21 +1021,27 @@ impl GhostChatApp {
         let selected = self.state.selected().len();
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.strong("선택 항목 정리");
+                ui.strong(language.text("선택 항목 정리", "Clean up selected"));
                 if selected > 0 {
                     ui.label(format!(
-                        "ChatGPT 데스크톱 앱 · {}",
-                        process_label(self.state.process_state_at(now))
+                        "{} · {}",
+                        language.text("ChatGPT 데스크톱 앱", "ChatGPT desktop app"),
+                        process_label(self.state.process_state_at(now), language)
                     ));
                 } else {
-                    ui.label("정리할 항목을 선택");
+                    ui.label(language.text("정리할 항목을 선택", "Select items to clean up"));
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if selected == 0 {
-                    "선택 항목 정리".to_owned()
+                    language
+                        .text("선택 항목 정리", "Clean up selected")
+                        .to_owned()
                 } else {
-                    format!("선택 {selected}개 정리")
+                    match language {
+                        Language::Korean => format!("선택 {selected}개 정리"),
+                        Language::English => format!("Clean up {selected}"),
+                    }
                 };
                 let button =
                     egui::Button::new(RichText::new(label).size(16.0).color(Color32::WHITE))
@@ -906,7 +1049,10 @@ impl GhostChatApp {
                         .fill(Color32::from_rgb(160, 42, 42));
                 if ui
                     .add_enabled(self.state.can_repair_at(now), button)
-                    .on_hover_text("이 기기의 대화 목록에서 선택 항목을 제거한다")
+                    .on_hover_text(language.text(
+                        "이 기기의 대화 목록에서 선택 항목을 제거한다",
+                        "Remove selected items from the conversation list on this device",
+                    ))
                     .clicked()
                 {
                     self.request_repair();
@@ -915,15 +1061,21 @@ impl GhostChatApp {
         });
         if selected > 0 {
             ui.horizontal(|ui| {
-                ui.menu_button("백업 위치", |ui| {
+                ui.menu_button(language.text("백업 위치", "Backup folder"), |ui| {
                     ui.set_min_width(360.0);
                     let mut backup = self.state.backup_directory_input().to_owned();
                     if ui
                         .add_enabled(
                             !busy,
                             egui::TextEdit::singleline(&mut backup)
+                                .id_salt("backup-directory")
                                 .desired_width(f32::INFINITY)
-                                .hint_text("백업을 저장할 폴더 경로"),
+                                .hint_text(
+                                    language.text(
+                                        "백업을 저장할 폴더 경로",
+                                        "Folder path for the backup",
+                                    ),
+                                ),
                         )
                         .changed()
                     {
@@ -937,14 +1089,20 @@ impl GhostChatApp {
                             == Some(RepairBlocker::WebVerification)
                             && self.state.browser_ready()
                             && ui
-                                .add_enabled(self.can_check_list(), egui::Button::new("목록 확인"))
+                                .add_enabled(
+                                    self.can_check_list(),
+                                    egui::Button::new(language.text("목록 확인", "Check list")),
+                                )
                                 .clicked()
                         {
                             self.request_list_check();
                         }
                         if self.state.process_state_at(now) == ProcessState::Unknown
                             && ui
-                                .add_enabled(!busy, egui::Button::new("다시 확인"))
+                                .add_enabled(
+                                    !busy,
+                                    egui::Button::new(language.text("다시 확인", "Retry")),
+                                )
                                 .clicked()
                         {
                             self.request_process_check();
@@ -956,11 +1114,27 @@ impl GhostChatApp {
     }
 
     fn repair_instruction(&self, now: Instant) -> Option<String> {
+        self.repair_instruction_for(now, self.language)
+    }
+
+    fn repair_instruction_for(&self, now: Instant, language: Language) -> Option<String> {
         let instruction = match self.state.repair_readiness_at(now).blocker()? {
-            RepairBlocker::Busy => "진행 중인 작업 완료 대기",
-            RepairBlocker::Platform => "이 운영체제에서는 조회만 가능",
-            RepairBlocker::Report => "이 파일은 정리할 수 없음 · 대화 목록 파일 확인 필요",
-            RepairBlocker::Selection => "검토 확인 후 정리할 항목 선택 필요",
+            RepairBlocker::Busy => language.text(
+                "진행 중인 작업 완료 대기",
+                "Wait for the current task to finish",
+            ),
+            RepairBlocker::Platform => language.text(
+                "이 운영체제에서는 조회만 가능",
+                "This operating system is read only",
+            ),
+            RepairBlocker::Report => language.text(
+                "이 파일은 정리할 수 없음 · 대화 목록 파일 확인 필요",
+                "This file cannot be cleaned up · check the conversation list file",
+            ),
+            RepairBlocker::Selection => language.text(
+                "검토 확인 후 정리할 항목 선택 필요",
+                "Review and confirm the items, then select them",
+            ),
             RepairBlocker::WebVerification => {
                 if self.state.browser_ready() {
                     if self
@@ -968,29 +1142,56 @@ impl GhostChatApp {
                         .web_comparison()
                         .is_some_and(|proof| !proof.is_fresh_at(now))
                     {
-                        "웹 확인이 만료됨 · 「목록 확인」을 다시 실행"
+                        language.text(
+                            "웹 확인이 만료됨 · 「목록 확인」을 다시 실행",
+                            "Web check expired · select Check list again",
+                        )
                     } else {
-                        "선택 항목의 웹 확인 필요 · 「목록 확인」을 다시 실행"
+                        language.text(
+                            "선택 항목의 웹 확인 필요 · 「목록 확인」을 다시 실행",
+                            "Selected items need a web check · select Check list",
+                        )
                     }
                 } else if matches!(
                     self.state.browser_state(),
                     BrowserState::Disconnected | BrowserState::Expired
                 ) {
-                    "「로그인」 후 「목록 확인」 필요"
+                    language.text(
+                        "「로그인」 후 「목록 확인」 필요",
+                        "Select Log in, then Check list",
+                    )
                 } else {
-                    "「목록 확인」으로 ChatGPT 연결 확인 필요"
+                    language.text(
+                        "「목록 확인」으로 ChatGPT 연결 확인 필요",
+                        "Select Check list to verify the ChatGPT connection",
+                    )
                 }
             }
-            RepairBlocker::BackupDirectory => "「백업 위치」에서 저장할 폴더 지정 필요",
+            RepairBlocker::BackupDirectory => language.text(
+                "「백업 위치」에서 저장할 폴더 지정 필요",
+                "Choose a folder in Backup folder",
+            ),
             RepairBlocker::DesktopProcess => {
                 if self.state.process_proof_expired_at(now) {
-                    "ChatGPT 데스크톱 앱 상태 확인 중"
+                    language.text(
+                        "ChatGPT 데스크톱 앱 상태 확인 중",
+                        "Checking the ChatGPT desktop app",
+                    )
                 } else if self.state.process_state_at(now) == ProcessState::Unknown {
-                    "ChatGPT 데스크톱 앱 상태 확인 불가"
+                    language.text(
+                        "ChatGPT 데스크톱 앱 상태 확인 불가",
+                        "Cannot check the ChatGPT desktop app",
+                    )
                 } else if self.state.process_state_at(now) == ProcessState::Running {
-                    "ChatGPT 데스크톱 앱을 종료하면 정리 가능 · 브라우저는 열어 둠"
+                    language.text(
+                        "ChatGPT 데스크톱 앱을 종료하면 정리 가능 · 브라우저는 열어 둠",
+                        "Quit the ChatGPT desktop app · keep the browser open",
+                    )
                 } else {
-                    "ChatGPT 데스크톱 앱 상태 확인 중"
+                    language.text(
+                        "ChatGPT 데스크톱 앱 상태 확인 중",
+                        "Checking the ChatGPT desktop app",
+                    )
                 }
             }
         };
@@ -1011,20 +1212,30 @@ impl GhostChatApp {
         let mut accept = false;
         let modal = egui::Modal::new(egui::Id::new("confirm-selected-cleanup")).show(ctx, |ui| {
             ui.set_width(360.0);
-            ui.heading(format!(
-                "선택 {}개 정리 확인",
-                confirmation.selected_count()
-            ));
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.render_language_selector(ui);
+                });
+            });
+            self.render_language_save_warning(ui);
+            let language = self.language;
+            ui.heading(match language {
+                Language::Korean => format!("선택 {}개 정리 확인", confirmation.selected_count()),
+                Language::English => format!("Confirm cleanup of {}", counted_items(confirmation.selected_count())),
+            });
             ui.add_space(8.0);
-            ui.label("백업을 만든 뒤 이 기기의 대화 목록에서 선택 항목을 제거한다.");
-            ui.label("ChatGPT 웹 대화는 삭제하지 않는다.");
+            ui.label(language.text("백업을 만든 뒤 이 기기의 대화 목록에서 선택 항목을 제거한다.", "Create a backup, then remove the selected items from this device’s conversation list."));
+            ui.label(language.text("ChatGPT 웹 대화는 삭제하지 않는다.", "Your ChatGPT conversations on the web will stay unchanged."));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("취소").clicked() {
+                if ui.button(language.text("취소", "Cancel")).clicked() {
                     ui.close();
                 }
                 if ui
-                    .button(format!("{}개 정리", confirmation.selected_count()))
+                    .button(match language {
+                        Language::Korean => format!("{}개 정리", confirmation.selected_count()),
+                        Language::English => format!("Clean up {}", confirmation.selected_count()),
+                    })
                     .clicked()
                 {
                     accept = true;
@@ -1039,34 +1250,64 @@ impl GhostChatApp {
     }
 
     fn render_receipt(&self, ui: &mut egui::Ui) {
+        let language = self.language;
         if let Some(receipt) = self.state.receipt() {
-            section(ui, "정리 완료", |ui| {
-                ui.label(format!("{}개 정리됨", receipt.removed_identities.len()));
-                ui.horizontal(|ui| {
-                    ui.label("백업:");
-                    clipped_label(ui, &receipt.backup_path.as_path().to_string_lossy());
-                });
-                ui.collapsing("상세 정보", |ui| {
-                    ui.label(format!(
-                        "대화 수: {} → {}",
-                        receipt.before_count, receipt.after_count
-                    ));
-                    ui.horizontal(|ui| {
-                        ui.label("SHA-256:");
-                        clipped_label(ui, &receipt.backup_hash);
+            section(
+                ui,
+                language.text("정리 완료", "Cleanup complete"),
+                |ui| {
+                    ui.label(match language {
+                        Language::Korean => {
+                            format!("{}개 정리됨", receipt.removed_identities.len())
+                        }
+                        Language::English => format!(
+                            "{} cleaned up",
+                            counted_items(receipt.removed_identities.len())
+                        ),
                     });
-                });
-            });
+                    ui.horizontal(|ui| {
+                        ui.label(language.text("백업:", "Backup:"));
+                        clipped_label(ui, &receipt.backup_path.as_path().to_string_lossy());
+                    });
+                    egui::CollapsingHeader::new(language.text("상세 정보", "Details"))
+                        .id_salt("receipt-details")
+                        .show(ui, |ui| {
+                            ui.label(format!(
+                                "{}: {} → {}",
+                                language.text("대화 수", "Conversations"),
+                                receipt.before_count,
+                                receipt.after_count
+                            ));
+                            ui.horizontal(|ui| {
+                                ui.label("SHA-256:");
+                                clipped_label(ui, &receipt.backup_hash);
+                            });
+                        });
+                },
+            );
         }
     }
 
     fn render_error(&mut self, ui: &mut egui::Ui) {
+        let language = self.language;
         let Some(error) = self.state.error().cloned() else {
             return;
         };
         let (heading, color) = match error.outcome {
-            ErrorOutcome::NoDataChange => ("작업 실패 · 데이터 변경 없음", Color32::DARK_RED),
-            ErrorOutcome::OutcomeUncertain => ("결과 불확실 · 백업 확인 필요", Color32::RED),
+            ErrorOutcome::NoDataChange => (
+                language.text(
+                    "작업 실패 · 데이터 변경 없음",
+                    "Task failed · no data changed",
+                ),
+                Color32::DARK_RED,
+            ),
+            ErrorOutcome::OutcomeUncertain => (
+                language.text(
+                    "결과 불확실 · 백업 확인 필요",
+                    "Outcome uncertain · check the backup",
+                ),
+                Color32::RED,
+            ),
         };
         egui::Frame::group(ui.style())
             .fill(color.gamma_multiply(0.18))
@@ -1075,11 +1316,18 @@ impl GhostChatApp {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.strong(heading);
-                    if ui.button("닫기").clicked() {
+                    if ui.button(language.text("닫기", "Dismiss")).clicked() {
                         self.state.clear_error();
                     }
                 });
-                ui.label(error.message);
+                ui.label(error.message_for(language));
+                if let Some(details) = error.details.as_deref() {
+                    egui::CollapsingHeader::new(language.text("상세 정보", "Details"))
+                        .id_salt("error-details")
+                        .show(ui, |ui| {
+                            ui.label(details);
+                        });
+                }
             });
     }
 }
@@ -1181,54 +1429,102 @@ fn clipped_label(ui: &mut egui::Ui, value: &str) {
         .on_hover_text(value);
 }
 
-fn selection_checkbox_label(thread: &CatalogThread) -> String {
-    row_checkbox_label("선택", thread)
+fn counted_items(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "item" } else { "items" })
 }
 
-fn review_checkbox_label(thread: &CatalogThread) -> String {
-    row_checkbox_label("검토 확인", thread)
+fn display_title(thread: &CatalogThread, language: Language, run_mode: RunMode) -> &str {
+    if run_mode != RunMode::Demo || thread.identity().host_id != "chatgpt:demo" {
+        return thread.display_title();
+    }
+    let english = match thread.identity().thread_id.as_str() {
+        "thread-demo-confirmed-1" => "Finished travel plans",
+        "thread-demo-confirmed-2" => "Completed code review",
+        "thread-demo-review-1" => "Untitled older conversation",
+        "thread-demo-review-2" => "Candidate without deletion logs",
+        "thread-demo-preserved-1" => "Current project conversation",
+        "thread-demo-preserved-2" => "Preserved conversation",
+        _ => return thread.display_title(),
+    };
+    language.text(thread.display_title(), english)
 }
 
-fn row_checkbox_label(action: &str, thread: &CatalogThread) -> String {
+fn selection_checkbox_label(
+    thread: &CatalogThread,
+    language: Language,
+    run_mode: RunMode,
+) -> String {
+    row_checkbox_label(language.text("선택", "Select"), thread, language, run_mode)
+}
+
+fn review_checkbox_label(thread: &CatalogThread, language: Language, run_mode: RunMode) -> String {
+    row_checkbox_label(
+        language.text("검토 확인", "Confirm review"),
+        thread,
+        language,
+        run_mode,
+    )
+}
+
+fn row_checkbox_label(
+    action: &str,
+    thread: &CatalogThread,
+    language: Language,
+    run_mode: RunMode,
+) -> String {
     let identity = thread.identity();
     format!(
         "{action}: {} — {}/{}",
-        thread.display_title(),
+        display_title(thread, language, run_mode),
         identity.host_id,
         identity.thread_id
     )
 }
 
-fn classification_label(ui: &mut egui::Ui, classification: Classification) {
+fn classification_label(ui: &mut egui::Ui, classification: Classification, language: Language) {
     let (text, color) = match classification {
-        Classification::ConfirmedDeleted => ("삭제 기록", Color32::from_rgb(180, 54, 54)),
-        Classification::ReviewRequired => ("검토 필요", Color32::from_rgb(196, 126, 16)),
-        Classification::Preserved => ("유지", Color32::from_rgb(50, 130, 82)),
+        Classification::ConfirmedDeleted => (
+            language.text("삭제 기록", "Delete log"),
+            Color32::from_rgb(180, 54, 54),
+        ),
+        Classification::ReviewRequired => (
+            language.text("검토 필요", "Review"),
+            Color32::from_rgb(196, 126, 16),
+        ),
+        Classification::Preserved => (
+            language.text("유지", "Keep"),
+            Color32::from_rgb(50, 130, 82),
+        ),
     };
     ui.label(RichText::new(text).color(color));
 }
 
-const fn operation_label(operation: Operation) -> &'static str {
+fn operation_label(operation: Operation, language: Language) -> &'static str {
     match operation {
-        Operation::Idle => "대기",
-        Operation::Discovering => "파일 찾는 중",
-        Operation::Scanning => "대화 불러오는 중",
-        Operation::OpeningBrowser => "브라우저 여는 중",
-        Operation::RestoringBrowser | Operation::AuthenticatingBrowser => "연결 중",
+        Operation::Idle => language.text("대기", "Idle"),
+        Operation::Discovering => language.text("파일 찾는 중", "Finding files"),
+        Operation::Scanning => language.text("대화 불러오는 중", "Loading conversations"),
+        Operation::OpeningBrowser => language.text("브라우저 여는 중", "Opening browser"),
+        Operation::RestoringBrowser | Operation::AuthenticatingBrowser => {
+            language.text("연결 중", "Connecting")
+        }
         Operation::CheckingLogin | Operation::CheckingBrowser => "",
-        Operation::DisconnectingBrowser => "연결 해제 중",
-        Operation::ComparingWeb => "목록 확인 중",
-        Operation::Checking => "ChatGPT 데스크톱 앱 종료 확인 중",
-        Operation::Repairing => "정리 중",
+        Operation::DisconnectingBrowser => language.text("연결 해제 중", "Disconnecting"),
+        Operation::ComparingWeb => language.text("목록 확인 중", "Checking list"),
+        Operation::Checking => language.text(
+            "ChatGPT 데스크톱 앱 종료 확인 중",
+            "Checking whether ChatGPT desktop is closed",
+        ),
+        Operation::Repairing => language.text("정리 중", "Cleaning up"),
     }
 }
 
-const fn process_label(state: ProcessState) -> &'static str {
+fn process_label(state: ProcessState, language: Language) -> &'static str {
     match state {
-        ProcessState::NotChecked => "확인 전",
-        ProcessState::Running => "실행 중",
-        ProcessState::StoppedVerified => "종료 확인됨",
-        ProcessState::Unknown => "확인 불가",
+        ProcessState::NotChecked => language.text("확인 전", "Not checked"),
+        ProcessState::Running => language.text("실행 중", "Running"),
+        ProcessState::StoppedVerified => language.text("종료 확인됨", "Closed"),
+        ProcessState::Unknown => language.text("확인 불가", "Unknown"),
     }
 }
 
@@ -1695,6 +1991,9 @@ mod tests {
 
     fn isolated_demo_app(platform: PlatformPolicy) -> GhostChatApp {
         GhostChatApp {
+            language: Language::Korean,
+            persist_language: false,
+            language_save_warning: None,
             state: AppState::new(RunMode::Demo, platform),
             worker: None,
             filter: ResultFilter::All,
@@ -1755,6 +2054,7 @@ mod tests {
         let rendered = render_test_frame(app, ctx, size, vec![]);
         let pos = rendered
             .iter()
+            .rev()
             .find(|(text, _)| text == label)
             .unwrap_or_else(|| panic!("missing button {label:?}"))
             .1
@@ -1825,9 +2125,13 @@ mod tests {
 
     #[test]
     fn compact_cleanup_shows_current_desktop_instruction_without_typing() {
-        for size in [egui::vec2(840.0, 660.0), egui::vec2(720.0, 580.0)] {
+        for (size, language) in [egui::vec2(840.0, 660.0), egui::vec2(720.0, 580.0)]
+            .into_iter()
+            .flat_map(|size| [Language::Korean, Language::English].map(|language| (size, language)))
+        {
             let ctx = egui::Context::default();
             let mut app = populated_demo_app(&ctx);
+            app.set_language(language);
             app.state.select_all_confirmed();
             assert_eq!(app.state.selected().len(), 2);
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
@@ -1853,9 +2157,15 @@ mod tests {
                 .collect::<Vec<_>>();
             output.drop_without_applying_deltas();
             for expected in [
-                "ChatGPT 데스크톱 앱 · 확인 전",
-                "선택 2개 정리",
-                "ChatGPT 데스크톱 앱 상태 확인 중",
+                language.text(
+                    "ChatGPT 데스크톱 앱 · 확인 전",
+                    "ChatGPT desktop app · Not checked",
+                ),
+                language.text("선택 2개 정리", "Clean up 2"),
+                language.text(
+                    "ChatGPT 데스크톱 앱 상태 확인 중",
+                    "Checking the ChatGPT desktop app",
+                ),
             ] {
                 let (_, clip, rect) = rendered
                     .iter()
@@ -1910,6 +2220,144 @@ mod tests {
             screen.intersect(button.0).contains_rect(button.1),
             "cleanup action is clipped: {button:?}"
         );
+    }
+
+    #[test]
+    fn failed_language_save_preserves_uncertain_cleanup_outcome_and_current_work() {
+        let ctx = egui::Context::default();
+        let mut app = populated_demo_app(&ctx);
+        app.persist_language = true;
+        app.state.select_all_confirmed();
+        app.state.set_process_state(ProcessState::StoppedVerified);
+        app.filter = ResultFilter::Confirmed;
+        app.request_repair();
+        let operation_error = AppError::outcome_uncertain("백업 확인 필요")
+            .with_english("Check the cleanup backup")
+            .with_details("backup: /original/backup.db; COMMIT interrupted");
+        app.state.set_error(operation_error.clone());
+        let selected = app.state.selected().clone();
+        let source = app.state.database_input().to_owned();
+        let confirmation = app.repair_confirmation;
+
+        app.set_language_with_save(Language::English, |language| {
+            assert_eq!(language, Language::English);
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "synthetic settings failure",
+            ))
+        });
+
+        assert_eq!(app.language, Language::English);
+        assert_eq!(
+            app.language_save_warning.as_deref(),
+            Some("synthetic settings failure")
+        );
+        let rendered = render_test_frame(&mut app, &ctx, egui::vec2(720.0, 580.0), vec![]);
+        assert!(rendered
+            .iter()
+            .any(|(text, _)| text
+                == "Could not save the language preference · applied for this session"));
+        assert_eq!(app.state.error(), Some(&operation_error));
+        assert_eq!(app.state.selected(), &selected);
+        assert_eq!(app.state.database_input(), source);
+        assert_eq!(app.repair_confirmation, confirmation);
+        assert_eq!(app.filter, ResultFilter::Confirmed);
+        assert_eq!(app.state.operation(), Operation::Idle);
+        assert!(app.state.receipt().is_none());
+        assert!(app.worker.is_none());
+
+        app.set_language_with_save(Language::English, |_| {
+            panic!("unchanged language must not save")
+        });
+        assert!(app.language_save_warning.is_some());
+        app.set_language_with_save(Language::Korean, |_| {
+            Err(io::Error::other("second failure"))
+        });
+        let rendered = render_test_frame(&mut app, &ctx, egui::vec2(720.0, 580.0), vec![]);
+        assert!(rendered
+            .iter()
+            .any(|(text, _)| text == "언어 설정을 저장하지 못함 · 이번 실행에는 적용됨"));
+        assert_eq!(app.state.error(), Some(&operation_error));
+        app.set_language_with_save(Language::English, |_| Ok(()));
+        assert!(app.language_save_warning.is_none());
+        assert_eq!(app.state.error(), Some(&operation_error));
+        assert_eq!(app.state.selected(), &selected);
+        assert_eq!(app.repair_confirmation, confirmation);
+    }
+
+    #[test]
+    fn switching_language_preserves_the_open_confirmation_and_current_work() {
+        let ctx = egui::Context::default();
+        let mut app = populated_demo_app(&ctx);
+        let review_identity = app.state.report().unwrap().threads[2].identity().clone();
+        app.state.set_reviewed(&review_identity, true);
+        app.state.select_all_confirmed();
+        app.state.set_process_state(ProcessState::StoppedVerified);
+        app.filter = ResultFilter::Confirmed;
+        app.request_repair();
+        app.state.set_error(
+            AppError::no_data_change("이전 작업 실패")
+                .with_english("Previous task failed")
+                .with_details("diagnostic /원본/path"),
+        );
+        let original_report = app.state.report().cloned().unwrap();
+        let selected = app.state.selected().clone();
+        let reviewed = app.state.reviewed().clone();
+        let source = app.state.database_input().to_owned();
+        let browser = app.state.browser_state();
+        let confirmation = app.repair_confirmation;
+        let size = egui::vec2(720.0, 580.0);
+
+        click_test_button(&mut app, &ctx, size, "English");
+        let rendered = render_test_frame(&mut app, &ctx, size, vec![]);
+        assert!(rendered
+            .iter()
+            .any(|(text, _)| text == "Confirm cleanup of 2 items"));
+        assert_eq!(app.state.report(), Some(&original_report));
+        assert_eq!(
+            display_title(&original_report.threads[0], app.language, RunMode::Demo),
+            "Finished travel plans"
+        );
+        assert_eq!(
+            display_title(&original_report.threads[0], app.language, RunMode::Live),
+            "정리된 여행 계획"
+        );
+        assert_eq!(app.state.selected(), &selected);
+        assert_eq!(app.state.reviewed(), &reviewed);
+        assert_eq!(app.state.database_input(), source);
+        assert_eq!(app.state.browser_state(), browser);
+        assert_eq!(app.filter, ResultFilter::Confirmed);
+        assert_eq!(app.repair_confirmation, confirmation);
+        assert!(rendered
+            .iter()
+            .any(|(text, _)| text == "Previous task failed"));
+        assert_eq!(
+            app.state.error().unwrap().details.as_deref(),
+            Some("diagnostic /원본/path")
+        );
+        assert!(app.state.receipt().is_none());
+        assert!(app.worker.is_none());
+        assert_eq!(app.language, Language::English);
+        assert!(!app.persist_language);
+        for expected in ["Confirm cleanup of 2 items", "Cancel", "Clean up 2"] {
+            let rect = rendered
+                .iter()
+                .find(|(text, _)| text == expected)
+                .unwrap()
+                .1;
+            assert!(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(rect),
+                "clipped English modal label {expected}"
+            );
+        }
+        click_test_button(&mut app, &ctx, size, "한국어");
+        let rendered = render_test_frame(&mut app, &ctx, size, vec![]);
+        assert!(rendered
+            .iter()
+            .any(|(text, _)| text == "선택 2개 정리 확인"));
+        assert!(rendered.iter().any(|(text, _)| text == "이전 작업 실패"));
+        assert_eq!(app.repair_confirmation, confirmation);
+        assert_eq!(app.state.selected(), &selected);
     }
 
     #[test]
@@ -2151,17 +2599,12 @@ mod tests {
     #[test]
     fn first_frame_has_korean_glyphs_for_ui_and_conversation_titles() {
         let ctx = egui::Context::default();
-        let app = GhostChatApp::new(&ctx, RunMode::Demo).expect("demo construction is in-memory");
+        let mut app =
+            GhostChatApp::new(&ctx, RunMode::Demo).expect("demo construction is in-memory");
+        let report = app.state.report().cloned().expect("demo report");
         let mut labels = vec!["경로 탐색 스캔 복구 백업 검토 확인 선택 한글 ㄱㅎㅏ"];
-        labels.extend(ResultFilter::ALL.map(ResultFilter::label));
-        labels.extend(
-            app.state
-                .report()
-                .expect("demo report")
-                .threads
-                .iter()
-                .map(CatalogThread::display_title),
-        );
+        labels.extend(ResultFilter::ALL.map(|filter| filter.label(Language::Korean)));
+        labels.extend(report.threads.iter().map(CatalogThread::display_title));
 
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             app.render_header(ui);
@@ -2225,13 +2668,13 @@ mod tests {
         let first = &report.threads[0];
         let second = &report.threads[1];
 
-        let first_selection = selection_checkbox_label(first);
-        let second_selection = selection_checkbox_label(second);
+        let first_selection = selection_checkbox_label(first, Language::Korean, RunMode::Demo);
+        let second_selection = selection_checkbox_label(second, Language::Korean, RunMode::Demo);
         assert_ne!(first_selection, second_selection);
         assert!(first_selection.contains(first.display_title()));
         assert!(first_selection.contains(&first.identity().thread_id));
 
-        let review = review_checkbox_label(first);
+        let review = review_checkbox_label(first, Language::Korean, RunMode::Demo);
         assert!(review.contains(first.display_title()));
         assert!(review.contains(&first.identity().thread_id));
         assert_ne!(review, first_selection);

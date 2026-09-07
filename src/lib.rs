@@ -6,6 +6,7 @@ pub mod catalog;
 mod default_browser;
 pub mod evidence;
 mod file_guard;
+pub mod i18n;
 pub mod model;
 pub mod platform;
 pub mod process_guard;
